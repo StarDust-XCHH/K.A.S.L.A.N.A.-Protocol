@@ -1,4 +1,7 @@
+![alt text](assets/preview.jpg)
+
 # K.A.S.L.A.N.A. Protocol
+
 
 K.A.S.L.A.N.A. Protocol (Kinetic Audio Stream & Local Automated Network Assistant) is a Python architecture for a physical-device WeChat voice wake-up assistant.
 
