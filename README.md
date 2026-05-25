@@ -15,10 +15,12 @@ Real ADB/UI automation, audio hardware, ASR, LLM, VAD, and TTS implementations a
 For future AI assistants and long-running development, read these first:
 
 - [AI_HANDOFF.md](AI_HANDOFF.md)
+- [AI_TASK_TEMPLATE.md](AI_TASK_TEMPLATE.md)
 - [docs/README.md](docs/README.md)
 - [docs/00_PROJECT_STATUS.md](docs/00_PROJECT_STATUS.md)
 - [docs/01_ARCHITECTURE.md](docs/01_ARCHITECTURE.md)
 - [docs/09_ROADMAP.md](docs/09_ROADMAP.md)
+- [docs/10_DEVELOPMENT_LOG.md](docs/10_DEVELOPMENT_LOG.md)
 
 ## Project Shape
 

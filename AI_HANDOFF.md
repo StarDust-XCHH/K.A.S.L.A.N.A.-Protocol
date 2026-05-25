@@ -60,6 +60,7 @@ Not implemented:
 ## Important Files
 
 - `README.md`: concise project entrypoint.
+- `AI_TASK_TEMPLATE.md`: reusable prompt for future AI assistants.
 - `docs/README.md`: documentation index.
 - `docs/00_PROJECT_STATUS.md`: exact current status.
 - `docs/01_ARCHITECTURE.md`: architecture rules.
@@ -71,6 +72,7 @@ Not implemented:
 - `docs/07_ORCHESTRATION_AND_COLLABORATION.md`: orchestration and collaboration.
 - `docs/08_TESTING_STANDARDS.md`: testing standards.
 - `docs/09_ROADMAP.md`: development roadmap.
+- `docs/10_DEVELOPMENT_LOG.md`: chronological development log.
 - `src/kaslana/ports/`: abstract interfaces.
 - `src/kaslana/core/orchestrator.py`: lifecycle coordinator.
 - `config/config.example.yaml`: safe example config.
@@ -105,7 +107,7 @@ python -m kaslana.main --config config/config.example.yaml --check-config
 
 ## Recommended Next Development Task
 
-Start with hardware diagnostics, not full call automation.
+Start with hardware diagnostics, not full call automation. Use `AI_TASK_TEMPLATE.md` as the handoff prompt for future assistant sessions.
 
 Recommended next scope:
 
@@ -130,7 +132,8 @@ For each module:
 3. Add or update tests.
 4. Implement the smallest useful feature.
 5. Run verification commands.
-6. Commit with a narrow message.
+6. Update `AI_HANDOFF.md`, `docs/00_PROJECT_STATUS.md`, relevant module docs, and `docs/10_DEVELOPMENT_LOG.md`.
+7. Commit with a narrow message.
 
 ## Git Notes
 
@@ -144,6 +147,12 @@ This documentation pass should be committed as:
 
 ```text
 Document engineering handbook and AI handoff
+```
+
+The AI handoff template pass should be committed as:
+
+```text
+Add AI task template and development log
 ```
 
 ## If Unsure

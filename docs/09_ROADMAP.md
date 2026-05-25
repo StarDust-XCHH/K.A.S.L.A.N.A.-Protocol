@@ -26,11 +26,15 @@
 
 - `docs/` 手册。
 - `AI_HANDOFF.md`。
+- `AI_TASK_TEMPLATE.md`。
+- `docs/10_DEVELOPMENT_LOG.md`。
 - README 文档入口。
 
 验收：
 
 - 新 AI 助手能读懂当前状态。
+- 新 AI 助手能直接复制通用提示语开始浏览整个工程。
+- 每轮完成后有固定流水账落盘位置。
 - 你能按硬件文档采购或整理外设。
 
 ## Milestone 2：硬件诊断
