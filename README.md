@@ -1,10 +1,24 @@
 # K.A.S.L.A.N.A. Protocol
 
-K.A.S.L.A.N.A. Protocol (Kinetic Audio Stream & Local Automated Network Assistant) is a Python architecture for a physical-device WeChat voice wake-up assistant. The safety boundary is strict: the system must not use WeChat reverse engineering, hooks, memory modification, or unofficial protocol APIs. All WeChat interaction is modeled as human-like UI automation on a real Android device.
+K.A.S.L.A.N.A. Protocol (Kinetic Audio Stream & Local Automated Network Assistant) is a Python architecture for a physical-device WeChat voice wake-up assistant.
 
-## First-Stage Goal
+The safety boundary is strict: the system must not use WeChat reverse engineering, hooks, memory modification, or unofficial protocol APIs. All WeChat interaction must be modeled as human-like UI automation on a real Android device.
 
-This repository currently contains the modular architecture only. It defines interfaces, configuration loading, the call state machine, an async orchestrator skeleton, adapter placeholders, and unit tests. Real ADB/UI automation, audio hardware, ASR, LLM, VAD, and TTS implementations are intentionally left for later module-by-module development.
+## Current Stage
+
+This repository currently contains the modular architecture and engineering handbook only. It defines interfaces, configuration loading, the call state machine, an async orchestrator skeleton, adapter placeholders, docs, and unit tests.
+
+Real ADB/UI automation, audio hardware, ASR, LLM, VAD, and TTS implementations are intentionally left for later module-by-module development.
+
+## Start Here
+
+For future AI assistants and long-running development, read these first:
+
+- [AI_HANDOFF.md](AI_HANDOFF.md)
+- [docs/README.md](docs/README.md)
+- [docs/00_PROJECT_STATUS.md](docs/00_PROJECT_STATUS.md)
+- [docs/01_ARCHITECTURE.md](docs/01_ARCHITECTURE.md)
+- [docs/09_ROADMAP.md](docs/09_ROADMAP.md)
 
 ## Project Shape
 
@@ -16,9 +30,8 @@ src/kaslana/
   adapters/    concrete implementation placeholders
   domain/      call session and conversation objects
   utils/       logging and audio path helpers
-tests/
-  unit/        pure Python architecture tests
-  integration/ reserved for hardware/model smoke tests
+docs/          Chinese engineering handbook and module plans
+tests/         unit tests first, integration tests reserved
 ```
 
 ## Local Setup
@@ -39,12 +52,21 @@ Copy-Item .env.example .env
 Copy-Item config/config.example.yaml config/config.yaml
 ```
 
-All device IDs, coordinates, contact aliases, model endpoints, and API keys must come from `.env` or YAML. Do not commit real secrets, real contacts, or private device identifiers.
+All device IDs, coordinates, contact aliases, model endpoints, and API keys must come from `.env` or YAML. Do not commit real secrets, real contacts, private device identifiers, model weights, reference audio, or generated call recordings.
 
-## Development Flow
+## Verification
+
+```powershell
+python -m pytest
+python -m ruff check .
+git diff --check
+python -m kaslana.main --config config/config.example.yaml --check-config
+```
+
+## Development Discipline
 
 1. Keep the orchestrator dependent only on `ports/` abstract classes.
 2. Implement one adapter at a time under `adapters/`.
 3. Add fake or contract tests before connecting real hardware.
-4. Add integration checks only after the pure architecture tests pass.
+4. Add integration checks only after pure architecture tests pass.
 5. Commit small, named steps so Git history mirrors the module-by-module build.

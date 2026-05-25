@@ -19,3 +19,14 @@ assets/greetings/*.wav
 assets/samples/*
 !assets/greetings/.gitkeep
 !assets/samples/.gitkeep
+logs/
+local_assets/
+calibration_outputs/
+diagnostics/
+ui_snapshots/
+*.wav
+*.mp3
+*.flac
+*.pt
+*.pth
+*.ckpt
