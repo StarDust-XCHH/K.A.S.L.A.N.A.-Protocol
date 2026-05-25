@@ -1,0 +1,66 @@
+project:
+  name: K.A.S.L.A.N.A. Protocol
+  timezone: Asia/Shanghai
+
+scheduler:
+  enabled: false
+  wake_time: "07:30"
+
+automation:
+  android_device_id: "replace-with-adb-device-id"
+  wechat:
+    package_name: "com.tencent.mm"
+    target_contact_alias: "replace-with-contact-alias"
+    launch_timeout_s: 20.0
+  coordinates:
+    search_button:
+      x: 960
+      y: 120
+    search_input:
+      x: 360
+      y: 120
+    first_result:
+      x: 360
+      y: 280
+    voice_call_button:
+      x: 720
+      y: 1540
+    hang_up_button:
+      x: 540
+      y: 1780
+
+audio:
+  input_device: "external-sound-card-input"
+  output_device: "external-sound-card-output"
+  sample_rate: 16000
+  channels: 1
+  chunk_ms: 30
+  greeting_path: "assets/greetings/kiana_morning.wav"
+
+vad:
+  provider: "silero"
+  threshold: 0.5
+  min_speech_ms: 250
+  silence_ms: 700
+  max_utterance_s: 12.0
+
+asr:
+  provider: "faster_whisper"
+  model: "small"
+  language: "zh"
+
+llm:
+  provider: "openai_compatible"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4.1-mini"
+  api_key_env: "KASLANA_LLM_API_KEY"
+  timeout_s: 30.0
+
+tts:
+  provider: "gpt_sovits"
+  endpoint: "http://127.0.0.1:9880"
+  speaker: "kiana"
+  timeout_s: 60.0
+
+prompts:
+  persona_path: "config/prompts/kiana.yaml"
