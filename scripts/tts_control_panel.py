@@ -11,27 +11,38 @@ import subprocess
 import sys
 import time
 import uuid
+import wave
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
+from kaslana.adapters.llm.tongyi_chat import TongyiChatError
 from kaslana.adapters.tts.gpt_sovits import (
     GptSovitsError,
     GptSovitsTts,
     load_voice_profile_from_infer_config,
 )
 from kaslana.config.loader import load_env_file
+from kaslana.services.llm_generate import (
+    LlmGenerateError,
+    LlmGenerateService,
+    LongTextGenerateRequest,
+    LongTextGenerateResult,
+)
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:5100"
 DEFAULT_PANEL_HOST = "127.0.0.1"
 DEFAULT_PANEL_PORT = 8765
 DEFAULT_GSV_ROOT = Path("local_assets/GSVI-2.2.4-240318/GPT-SoVITS-Inference")
 DEFAULT_OUTPUT_DIR = Path("diagnostics/tts/control_panel")
+DEFAULT_PERSONA_PATH = Path("config/prompts/kiana.yaml")
+PANEL_VERSION = "2026-05-26-tts-timing-qwen-flash"
 
 
 @dataclass(frozen=True)
@@ -44,7 +55,8 @@ class ControlPanelConfig:
     logs_dir: Path
     pid_file: Path
     character: str
-    tts_timeout_s: float = 60.0
+    persona_path: Path
+    tts_timeout_s: float = 180.0
     start_timeout_s: float = 180.0
 
 
@@ -53,9 +65,15 @@ class ControlPanelError(RuntimeError):
 
 
 class TtsControlPanel:
-    def __init__(self, config: ControlPanelConfig) -> None:
+    def __init__(
+        self,
+        config: ControlPanelConfig,
+        *,
+        llm_service: LlmGenerateService | None = None,
+    ) -> None:
         self.config = config
         self.port = _port_from_endpoint(config.endpoint)
+        self.llm_service = llm_service or LlmGenerateService(persona_path=config.persona_path)
 
     def status(self) -> dict[str, Any]:
         pid = self._read_pid()
@@ -124,43 +142,41 @@ class TtsControlPanel:
 
     def stop_server(self) -> dict[str, Any]:
         pid = self._read_pid()
-        if pid is None:
-            if self.is_endpoint_reachable():
+        if pid is not None:
+            process_info = self._read_process_info(pid)
+            if process_info is None:
+                self._remove_pid_file()
+            elif not self._is_managed_process(process_info):
                 return {
                     "ok": False,
                     "message": (
-                        "Port is reachable, but no project PID file exists. "
+                        "PID file does not point to this project's GSVI process. "
                         "Refusing to stop it."
                     ),
                     "status": self.status(),
                 }
-            return {"ok": True, "message": "GSVI service is not running.", "status": self.status()}
+            else:
+                self._kill_process(pid)
+                return self._wait_for_stop()
 
-        process_info = self._read_process_info(pid)
-        if process_info is None:
-            self._remove_pid_file()
-            if self.is_endpoint_reachable():
+        if self.is_endpoint_reachable():
+            listener = self._find_gsvi_listener_process()
+            if listener is None:
                 return {
                     "ok": False,
                     "message": (
-                        "PID is stale, but the port is still reachable. Refusing to stop it."
+                        "Port is reachable, but no GSVI process was found on the endpoint. "
+                        "Refusing to stop it."
                     ),
                     "status": self.status(),
                 }
-            return {"ok": True, "message": "Removed stale PID file.", "status": self.status()}
+            self._kill_process(int(listener["ProcessId"]))
+            return self._wait_for_stop()
 
-        if not self._is_managed_process(process_info):
-            return {
-                "ok": False,
-                "message": (
-                    "PID file does not point to this project's GSVI process. "
-                    "Refusing to stop it."
-                ),
-                "status": self.status(),
-            }
+        return {"ok": True, "message": "GSVI service is not running.", "status": self.status()}
 
-        self._kill_process(pid)
-        deadline = time.monotonic() + 15
+    def _wait_for_stop(self) -> dict[str, Any]:
+        deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if not self.is_endpoint_reachable():
                 self._remove_pid_file()
@@ -216,10 +232,11 @@ class TtsControlPanel:
             )
 
         profile = load_voice_profile_from_infer_config(self.config.infer_config, emotion=emotion)
+        timeout_s = _synthesis_timeout_s(text, self.config.tts_timeout_s)
         tts = GptSovitsTts(
             endpoint=self.config.endpoint,
             voice_profile=profile,
-            timeout_s=self.config.tts_timeout_s,
+            timeout_s=timeout_s,
             api_style="gsvi",
             character=character,
             emotion=emotion,
@@ -230,12 +247,16 @@ class TtsControlPanel:
             top_p=top_p,
             temperature=temperature,
         )
+        started = time.perf_counter()
         audio = asyncio.run(tts.synthesize(text))
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
 
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.wav"
         output_path = self.config.output_dir / filename
         output_path.write_bytes(audio.audio)
+        audio_duration_ms = _wav_duration_ms(audio.audio)
+        rtf = round(elapsed_ms / audio_duration_ms, 3) if audio_duration_ms > 0 else None
         return {
             "filename": filename,
             "audio_url": f"/audio/{filename}",
@@ -243,7 +264,22 @@ class TtsControlPanel:
             "sample_rate": audio.sample_rate,
             "channels": audio.channels,
             "format": audio.format,
+            "elapsed_ms": elapsed_ms,
+            "audio_duration_ms": audio_duration_ms,
+            "rtf": rtf,
+            "char_count": len(text),
+            "timeout_s": timeout_s,
         }
+
+    def tongyi_status(self) -> dict[str, Any]:
+        return self.llm_service.status()
+
+    def tongyi_is_available(self) -> bool:
+        return bool(self.llm_service.status().get("available"))
+
+    def generate_long_text(self, payload: dict[str, Any]) -> LongTextGenerateResult:
+        request = _parse_long_text_request(payload)
+        return self.llm_service.generate(request)
 
     def resolve_audio_file(self, raw_name: str) -> Path:
         name = unquote(raw_name)
@@ -338,13 +374,73 @@ class TtsControlPanel:
             return None
         return raw
 
-    def _is_managed_process(self, process_info: dict[str, Any]) -> bool:
+    def _is_gsvi_process(self, process_info: dict[str, Any]) -> bool:
         command_line = str(process_info.get("CommandLine") or "").lower()
         executable = str(process_info.get("ExecutablePath") or "").lower()
         root = str(self.config.gsv_root.resolve()).lower()
-        return root in command_line or root in executable
+        markers = (
+            root,
+            "tts_backend",
+            "gpt-sovits",
+            "gsvi",
+            ".kaslana_start_backend.py",
+        )
+        return any(
+            marker and (marker in command_line or marker in executable)
+            for marker in markers
+        )
+
+    def _is_managed_process(self, process_info: dict[str, Any]) -> bool:
+        return self._is_gsvi_process(process_info)
+
+    def _find_gsvi_listener_process(self) -> dict[str, Any] | None:
+        for pid in self._find_port_listener_pids(self.port):
+            process_info = self._read_process_info(pid)
+            if process_info is not None and self._is_gsvi_process(process_info):
+                return process_info
+        return None
+
+    def _find_port_listener_pids(self, port: int) -> list[int]:
+        command = (
+            f"(Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue "
+            "| Select-Object -ExpandProperty OwningProcess -Unique) "
+            "| ForEach-Object { $_ }"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        pids: list[int] = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line.isdigit():
+                continue
+            pid = int(line)
+            if pid not in pids:
+                pids.append(pid)
+        return pids
 
     def _kill_process(self, pid: int) -> None:
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode not in {0, 128}:
+                details = (result.stderr or result.stdout or "").strip()
+                raise ControlPanelError(
+                    f"Failed to stop process {pid} with taskkill: {details or result.returncode}"
+                )
+            return
         try:
             os.kill(pid, 15)
         except OSError as exc:
@@ -404,13 +500,19 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            self._send_html(INDEX_HTML)
+            self._send_html(INDEX_HTML.replace("__PANEL_VERSION__", PANEL_VERSION))
             return
         if parsed.path == "/api/status":
             self._send_json({"ok": True, "status": self.controller.status()})
             return
         if parsed.path == "/api/characters":
             self._handle_characters()
+            return
+        if parsed.path == "/api/tongyi/status":
+            self._send_json({"ok": True, "status": self.controller.tongyi_status()})
+            return
+        if parsed.path == "/api/panel/info":
+            self._send_json({"ok": True, "version": PANEL_VERSION})
             return
         if parsed.path.startswith("/audio/"):
             self._handle_audio(parsed.path.removeprefix("/audio/"))
@@ -419,6 +521,9 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/api/generate-long-text":
+            self._handle_generate_long_text()
+            return
         if parsed.path == "/api/start":
             self._call_json(self.controller.start_server)
             return
@@ -454,6 +559,37 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"ok": True, "audio": result})
 
+    def _handle_generate_long_text(self) -> None:
+        if not self.controller.tongyi_is_available():
+            self._send_error_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                (
+                    "服务端未读取到环境变量 TONGYI_API_KEY 或 DASHSCOPE_API_KEY，"
+                    "通义长文生成已禁用"
+                ),
+            )
+            return
+        try:
+            payload = self._read_json_body()
+            result = self.controller.generate_long_text(payload)
+        except LlmGenerateError as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except TongyiChatError as exc:
+            self._send_error_json(HTTPStatus.BAD_GATEWAY, str(exc))
+            return
+        self._send_json(
+            {
+                "ok": True,
+                "text": result.text,
+                "model": result.model,
+                "topic": result.topic,
+                "elapsed_ms": result.elapsed_ms,
+                "char_count": result.char_count,
+                "usage": result.usage,
+            }
+        )
+
     def _handle_audio(self, raw_name: str) -> None:
         try:
             path = self.controller.resolve_audio_file(raw_name)
@@ -466,7 +602,7 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(data)
+        _safe_write(self.wfile, data)
 
     def _call_json(self, callback: Any) -> None:
         try:
@@ -496,7 +632,7 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        _safe_write(self.wfile, body)
 
     def _send_json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -505,7 +641,7 @@ class ControlPanelRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        _safe_write(self.wfile, body)
 
     def _send_error_json(self, status: HTTPStatus, message: str) -> None:
         self._send_json({"ok": False, "error": message}, status=status)
@@ -531,6 +667,12 @@ def build_config(args: argparse.Namespace) -> ControlPanelConfig:
     character = (
         args.character or os.environ.get("KASLANA_TTS_CHARACTER") or infer_config.parent.name
     )
+    persona_path = Path(
+        args.persona_path
+        or os.environ.get("KASLANA_PERSONA_PATH", DEFAULT_PERSONA_PATH)
+    )
+    if not persona_path.is_absolute():
+        persona_path = repo_root / persona_path
     return ControlPanelConfig(
         repo_root=repo_root,
         endpoint=endpoint,
@@ -540,6 +682,7 @@ def build_config(args: argparse.Namespace) -> ControlPanelConfig:
         logs_dir=logs_dir,
         pid_file=logs_dir / "gsvi-server.pid",
         character=character,
+        persona_path=persona_path,
         tts_timeout_s=args.tts_timeout_s,
         start_timeout_s=args.start_timeout_s,
     )
@@ -554,8 +697,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gsv-root", help="Path to the local GSVI prepack root.")
     parser.add_argument("--output-dir", help="Directory for generated WAV files.")
     parser.add_argument("--character", help="Default GSVI character.")
+    parser.add_argument(
+        "--persona-path",
+        help="Path to Kiana persona YAML for Tongyi long-text generation.",
+    )
     parser.add_argument("--tts-timeout-s", type=float, default=60.0, help="Synthesis timeout.")
     parser.add_argument("--start-timeout-s", type=float, default=180.0, help="Startup timeout.")
+    parser.add_argument(
+        "--open-browser",
+        action="store_true",
+        help="Open the control panel in the default browser after the server starts.",
+    )
     return parser
 
 
@@ -565,9 +717,26 @@ def run_server(args: argparse.Namespace) -> None:
     config = build_config(args)
     controller = TtsControlPanel(config)
     handler = ControlPanelRequestHandler.create(controller)
-    server = ThreadingHTTPServer((args.host, args.port), handler)
-    print(f"TTS control panel: http://{args.host}:{args.port}")
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), handler)
+    except OSError as exc:
+        raise SystemExit(
+            f"Cannot bind control panel to http://{args.host}:{args.port}: {exc}\n"
+            "Another panel instance may still be running. "
+            "Close the old terminal or stop the process using port "
+            f"{args.port}, then start again."
+        ) from exc
+    tongyi = controller.tongyi_status()
+    print(f"KASLANA control panel v{PANEL_VERSION}: http://{args.host}:{args.port}")
     print(f"GSVI endpoint: {config.endpoint}")
+    print(f"Persona prompt: {config.persona_path}")
+    print(f"Tongyi configured: {tongyi.get('configured')} model={tongyi.get('model')}")
+    if not tongyi.get("configured"):
+        print("Set TONGYI_API_KEY or DASHSCOPE_API_KEY in .env to enable long-text generation.")
+    if args.open_browser:
+        import webbrowser
+
+        webbrowser.open(f"http://{args.host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -589,6 +758,29 @@ def _port_from_endpoint(endpoint: str) -> int:
     if parsed.port is None:
         raise ControlPanelError("GSVI endpoint must include a port.")
     return parsed.port
+
+
+def _wav_duration_ms(audio: bytes) -> int:
+    try:
+        with wave.open(BytesIO(audio), "rb") as wav_file:
+            rate = wav_file.getframerate()
+            if rate <= 0:
+                return 0
+            return int(wav_file.getnframes() / rate * 1000)
+    except wave.Error:
+        return 0
+
+
+def _safe_write(stream: Any, data: bytes) -> None:
+    try:
+        stream.write(data)
+    except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+        return
+
+
+def _synthesis_timeout_s(text: str, base_timeout_s: float) -> float:
+    char_count = len(text.strip())
+    return max(base_timeout_s, min(600.0, 45.0 + char_count * 0.35))
 
 
 def _int_param(
@@ -627,12 +819,29 @@ def _float_param(
     return parsed
 
 
+def _parse_long_text_request(payload: dict[str, Any]) -> LongTextGenerateRequest:
+    topic = str(payload.get("topic", "")).strip()
+    if not topic:
+        raise LlmGenerateError("主题不能为空。")
+    scene = str(payload.get("scene", "")).strip()
+    user_hint = str(payload.get("user_hint", "")).strip()
+    length_tier = str(payload.get("length_tier", "short")).strip().lower() or "short"
+    tone_strength = str(payload.get("tone_strength", "normal")).strip().lower() or "normal"
+    return LongTextGenerateRequest(
+        topic=topic,
+        scene=scene,
+        user_hint=user_hint,
+        length_tier=length_tier,  # type: ignore[arg-type]
+        tone_strength=tone_strength,  # type: ignore[arg-type]
+    )
+
+
 INDEX_HTML = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>KASLANA TTS Control Panel</title>
+  <title>KASLANA 本地调试面板</title>
   <style>
     :root {
       color-scheme: light;
@@ -671,10 +880,16 @@ INDEX_HTML = r"""<!doctype html>
     main {
       padding: 24px;
       display: grid;
-      grid-template-columns: minmax(320px, 520px) minmax(320px, 1fr);
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-areas:
+        "synth tongyi"
+        "output output";
       gap: 20px;
       align-content: start;
     }
+    #synthPanel { grid-area: synth; }
+    #tongyiPanel { grid-area: tongyi; }
+    #outputPanel { grid-area: output; }
     h1, h2 {
       margin: 0;
       font-weight: 700;
@@ -825,6 +1040,10 @@ INDEX_HTML = r"""<!doctype html>
     @media (max-width: 920px) {
       .app, main {
         grid-template-columns: 1fr;
+        grid-template-areas:
+          "synth"
+          "tongyi"
+          "output";
       }
       aside { padding: 20px; }
       main { padding: 16px; }
@@ -834,13 +1053,16 @@ INDEX_HTML = r"""<!doctype html>
 <body>
   <div class="app">
     <aside>
-      <h1>KASLANA TTS</h1>
-      <p class="subtitle">本地 GSVI 试音控制台</p>
+      <h1>KASLANA</h1>
+      <p class="subtitle">本地调试面板（TTS + 通义长文）</p>
       <div class="row">
         <span id="statusPill" class="status">checking</span>
+        <span id="llmStatusPill" class="status">llm</span>
       </div>
       <div class="meta">
+        <div><strong>Panel</strong><br><span id="panelVersionText">-</span></div>
         <div><strong>Endpoint</strong><br><span id="endpointText">-</span></div>
+        <div><strong>Managed</strong><br><span id="managedText">-</span></div>
         <div><strong>PID</strong><br><span id="pidText">-</span></div>
         <div><strong>Port</strong><br><span id="portText">-</span></div>
       </div>
@@ -851,7 +1073,7 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </aside>
     <main>
-      <section class="panel stack">
+      <section id="synthPanel" class="panel stack">
         <h2>合成测试</h2>
         <div id="message" class="message">正在读取服务状态。</div>
         <div class="grid-2">
@@ -902,9 +1124,55 @@ INDEX_HTML = r"""<!doctype html>
           <button id="synthBtn" class="primary">生成音频</button>
         </div>
       </section>
-      <section class="panel stack">
+      <section id="tongyiPanel" class="panel stack">
+        <h2>琪亚娜文本生成（通义 <span id="llmModelLabel">-</span>）</h2>
+        <div id="llmMessage" class="message">正在读取通义服务状态。</div>
+        <div class="field">
+          <label for="llmTopic">主题（必填）</label>
+          <input id="llmTopic" type="text" placeholder="例如：今天的训练、和芽衣一起吃早餐">
+        </div>
+        <div class="field">
+          <label for="llmScene">场景（可选）</label>
+          <input id="llmScene" type="text" placeholder="例如：早晨电话叫醒、训练后闲聊">
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="llmLengthTier">长度档位</label>
+            <select id="llmLengthTier">
+              <option value="short" selected>short（约 80-150 字，短句实时测试）</option>
+              <option value="medium">medium（约 300-500 字）</option>
+              <option value="long">long（约 700-1000 字）</option>
+              <option value="stress">stress（约 1200-1800 字）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="llmToneStrength">语气强度</label>
+            <select id="llmToneStrength">
+              <option value="low">low</option>
+              <option value="normal" selected>normal</option>
+              <option value="high">high</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="llmHint">补充说明（可选）</label>
+          <textarea id="llmHint" style="min-height: 72px;"
+            placeholder="例如：语气更活泼，提到舰长"></textarea>
+        </div>
+        <div class="field">
+          <label for="llmOutput">生成结果</label>
+          <textarea id="llmOutput" style="min-height: 180px;"
+            placeholder="生成完成后会显示在这里，并自动填入 TTS 文本框。"></textarea>
+        </div>
+        <div id="llmMeta" class="result">尚未生成长文。</div>
+        <div class="row">
+          <button id="llmGenerateBtn" class="primary">生成长文</button>
+        </div>
+      </section>
+      <section id="outputPanel" class="panel stack">
         <h2>输出</h2>
         <div id="result" class="result">还没有生成音频。</div>
+        <div id="ttsMeta" class="result">TTS 链路：尚未合成。</div>
         <audio id="player" controls hidden></audio>
         <details>
           <summary>最近日志</summary>
@@ -914,8 +1182,11 @@ INDEX_HTML = r"""<!doctype html>
     </main>
   </div>
   <script>
+    const PANEL_VERSION = "__PANEL_VERSION__";
     const els = {
       statusPill: document.getElementById("statusPill"),
+      panelVersionText: document.getElementById("panelVersionText"),
+      managedText: document.getElementById("managedText"),
       endpointText: document.getElementById("endpointText"),
       pidText: document.getElementById("pidText"),
       portText: document.getElementById("portText"),
@@ -933,17 +1204,38 @@ INDEX_HTML = r"""<!doctype html>
       temperature: document.getElementById("temperature"),
       message: document.getElementById("message"),
       result: document.getElementById("result"),
+      ttsMeta: document.getElementById("ttsMeta"),
       player: document.getElementById("player"),
-      logs: document.getElementById("logs")
+      logs: document.getElementById("logs"),
+      llmStatusPill: document.getElementById("llmStatusPill"),
+      llmMessage: document.getElementById("llmMessage"),
+      llmTopic: document.getElementById("llmTopic"),
+      llmScene: document.getElementById("llmScene"),
+      llmLengthTier: document.getElementById("llmLengthTier"),
+      llmToneStrength: document.getElementById("llmToneStrength"),
+      llmHint: document.getElementById("llmHint"),
+      llmOutput: document.getElementById("llmOutput"),
+      llmMeta: document.getElementById("llmMeta"),
+      llmModelLabel: document.getElementById("llmModelLabel"),
+      llmGenerateBtn: document.getElementById("llmGenerateBtn")
     };
     let characters = {};
+    let llmAvailable = false;
+    let lastTtsStatus = null;
 
-    async function api(path, options = {}) {
+    els.panelVersionText.textContent = PANEL_VERSION;
+
+    async function apiJson(path, options = {}) {
       const response = await fetch(path, {
         headers: {"Content-Type": "application/json"},
         ...options
       });
       const payload = await response.json();
+      return {response, payload};
+    }
+
+    async function api(path, options = {}) {
+      const {response, payload} = await apiJson(path, options);
       if (!response.ok || payload.ok === false) {
         throw new Error(payload.error || payload.message || "Request failed");
       }
@@ -951,9 +1243,106 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function setBusy(isBusy) {
-      [els.startBtn, els.stopBtn, els.refreshBtn, els.synthBtn].forEach((button) => {
-        button.disabled = isBusy;
-      });
+      els.refreshBtn.disabled = isBusy;
+      els.synthBtn.disabled = isBusy;
+      if (isBusy) {
+        els.startBtn.disabled = true;
+        els.stopBtn.disabled = true;
+        els.llmGenerateBtn.disabled = true;
+        return;
+      }
+      if (lastTtsStatus) {
+        renderServiceControls(lastTtsStatus);
+      }
+      els.llmGenerateBtn.disabled = !llmAvailable;
+    }
+
+    function renderServiceControls(status) {
+      const running = Boolean(status && status.running);
+      const managed = Boolean(status && status.managed);
+      els.startBtn.disabled = running;
+      els.stopBtn.disabled = !running;
+      els.stopBtn.title = running && !managed
+        ? "将关闭当前端口上的 GSVI 进程（可能是外部启动）。"
+        : "";
+      els.managedText.textContent = running
+        ? (managed ? "yes (panel)" : "yes (external)")
+        : "-";
+    }
+
+    function sayLlm(text, isError = false) {
+      els.llmMessage.textContent = text;
+      els.llmMessage.classList.toggle("error", isError);
+    }
+
+    function renderLlmStatus(status) {
+      llmAvailable = Boolean(status && status.available);
+      const model = status && status.model ? status.model : "-";
+      els.llmStatusPill.textContent = llmAvailable ? "llm ready" : "llm off";
+      els.llmStatusPill.className = "status " + (llmAvailable ? "running" : "stopped");
+      els.llmModelLabel.textContent = model;
+      els.llmGenerateBtn.disabled = !llmAvailable;
+      sayLlm(status && status.message ? status.message : "通义服务状态未知。", !llmAvailable);
+    }
+
+    async function refreshLlmStatus() {
+      try {
+        const payload = await api("/api/tongyi/status");
+        renderLlmStatus(payload.status);
+      } catch (error) {
+        renderLlmStatus({available: false, message: error.message});
+      }
+    }
+
+    function llmRequestBody() {
+      return {
+        topic: els.llmTopic.value.trim(),
+        scene: els.llmScene.value.trim(),
+        length_tier: els.llmLengthTier.value,
+        tone_strength: els.llmToneStrength.value,
+        user_hint: els.llmHint.value.trim()
+      };
+    }
+
+    function renderLlmMeta(payload) {
+      const usage = payload.usage || {};
+      const usageText = usage.total_tokens
+        ? ` · tokens ${usage.total_tokens}`
+        : "";
+      els.llmMeta.textContent = [
+        `${payload.elapsed_ms} ms`,
+        `${payload.char_count} chars`,
+        payload.model || "qwen-flash",
+        usageText
+      ].filter(Boolean).join(" · ");
+    }
+
+    async function generateLongText() {
+      const body = llmRequestBody();
+      if (!body.topic) {
+        sayLlm("请先填写主题。", true);
+        return;
+      }
+      setBusy(true);
+      els.llmOutput.value = "";
+      els.llmMeta.textContent = "正在生成…";
+      sayLlm("正在通过通义生成长文。");
+      try {
+        const payload = await api("/api/generate-long-text", {
+          method: "POST",
+          body: JSON.stringify(body)
+        });
+        els.llmOutput.value = payload.text || "";
+        els.text.value = payload.text || "";
+        renderLlmMeta(payload);
+        sayLlm(`文本已生成，并已自动填入 TTS 文本框（${payload.model || "qwen-flash"}）。`);
+        say("长文已填入 TTS 测试语句，可手动点击生成音频。");
+      } catch (error) {
+        sayLlm(error.message, true);
+        els.llmMeta.textContent = "生成失败。";
+      } finally {
+        setBusy(false);
+      }
     }
 
     function say(text, isError = false) {
@@ -962,11 +1351,13 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function renderStatus(status) {
+      lastTtsStatus = status;
       els.statusPill.textContent = status.running ? "running" : "stopped";
       els.statusPill.className = "status " + (status.running ? "running" : "stopped");
       els.endpointText.textContent = status.endpoint || "-";
       els.pidText.textContent = status.pid || (status.running ? "external" : "-");
       els.portText.textContent = status.port || "-";
+      renderServiceControls(status);
       const stdout = status.logs && status.logs.stdout ? status.logs.stdout : "";
       const stderr = status.logs && status.logs.stderr ? status.logs.stderr : "";
       els.logs.textContent = [stdout, stderr].filter(Boolean).join("\n\n--- stderr ---\n") || "-";
@@ -1011,7 +1402,11 @@ INDEX_HTML = r"""<!doctype html>
         if (statusPayload.status.running) {
           const chars = await api("/api/characters");
           renderCharacters(chars.characters);
-          say("服务在线，可以合成测试音频。");
+          if (statusPayload.status.managed) {
+            say("服务在线，可以合成测试音频。");
+          } else {
+            say("检测到外部 GSVI 服务在线，可直接合成；也可点击「关闭服务」停止端口上的 GSVI。");
+          }
         } else {
           renderCharacters({});
           say("服务未启动。");
@@ -1021,6 +1416,7 @@ INDEX_HTML = r"""<!doctype html>
       } finally {
         setBusy(false);
       }
+      await refreshLlmStatus();
     }
 
     async function startServer() {
@@ -1028,7 +1424,7 @@ INDEX_HTML = r"""<!doctype html>
       say("正在启动 GSVI 服务。");
       try {
         const payload = await api("/api/start", {method: "POST", body: "{}"});
-        renderStatus(payload);
+        renderStatus(payload.status || payload);
         say(payload.message || "服务已启动。");
         await refresh();
       } catch (error) {
@@ -1042,9 +1438,13 @@ INDEX_HTML = r"""<!doctype html>
       setBusy(true);
       say("正在关闭 GSVI 服务。");
       try {
-        const payload = await api("/api/stop", {method: "POST", body: "{}"});
+        const {payload} = await apiJson("/api/stop", {method: "POST", body: "{}"});
         renderStatus(payload.status || {});
-        say(payload.message || "服务已关闭。");
+        if (payload.ok === false) {
+          say(payload.message || payload.error || "关闭失败。", true);
+        } else {
+          say(payload.message || "服务已关闭。");
+        }
         await refresh();
       } catch (error) {
         say(error.message, true);
@@ -1054,9 +1454,27 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
+    function renderTtsMeta(audio) {
+      const parts = [
+        `${audio.elapsed_ms} ms`,
+        `${audio.char_count} chars`,
+        audio.audio_duration_ms ? `${(audio.audio_duration_ms / 1000).toFixed(2)} s audio` : null,
+        audio.rtf != null ? `RTF ${audio.rtf}` : null,
+        `${audio.sample_rate} Hz`,
+        `${audio.bytes} bytes`
+      ].filter(Boolean);
+      els.ttsMeta.textContent = "TTS 链路：" + parts.join(" · ");
+    }
+
     async function synthesize() {
       setBusy(true);
-      say("正在合成音频。");
+      els.ttsMeta.textContent = "TTS 链路：正在合成…";
+      const charCount = (els.text.value || "").length;
+      if (charCount > 300) {
+        say(`正在合成音频（约 ${charCount} 字，长文可能需要数分钟，请勿关闭页面）。`);
+      } else {
+        say("正在合成音频。");
+      }
       try {
         const payload = await api("/api/synthesize", {
           method: "POST",
@@ -1072,16 +1490,12 @@ INDEX_HTML = r"""<!doctype html>
           })
         });
         const audio = payload.audio;
-        els.result.textContent = [
-          audio.filename,
-          `${audio.bytes} bytes`,
-          `${audio.sample_rate} Hz`,
-          `${audio.channels} channel(s)`
-        ].join(" · ");
+        els.result.textContent = audio.filename;
+        renderTtsMeta(audio);
         els.player.src = audio.audio_url + "?t=" + Date.now();
         els.player.hidden = false;
         els.player.load();
-        say("音频已生成。");
+        say(`音频已生成（TTS ${audio.elapsed_ms} ms）。`);
       } catch (error) {
         say(error.message, true);
       } finally {
@@ -1094,7 +1508,9 @@ INDEX_HTML = r"""<!doctype html>
     els.startBtn.addEventListener("click", startServer);
     els.stopBtn.addEventListener("click", stopServer);
     els.synthBtn.addEventListener("click", synthesize);
+    els.llmGenerateBtn.addEventListener("click", generateLongText);
     refresh();
+    refreshLlmStatus();
   </script>
 </body>
 </html>

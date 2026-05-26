@@ -16,7 +16,8 @@ def test_example_config_loads() -> None:
     assert config.automation.wechat.package_name == "com.tencent.mm"
     assert config.audio.sample_rate == 16000
     assert config.vad.provider == "silero"
-    assert config.llm.api_key_env == "KASLANA_LLM_API_KEY"
+    assert config.llm.api_key_env == "TONGYI_API_KEY"
+    assert config.llm.model == "qwen-flash"
     assert config.offline_cache.enabled is False
     assert config.offline_cache.cache_dir == Path("cache")
     assert config.ingestion.paths == ()

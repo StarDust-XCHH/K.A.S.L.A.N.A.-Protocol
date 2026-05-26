@@ -66,11 +66,11 @@ asr:
   language: "zh"
 
 llm:
-  provider: "openai_compatible"
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4.1-mini"
-  api_key_env: "KASLANA_LLM_API_KEY"
-  timeout_s: 30.0
+  provider: "dashscope"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "qwen-flash"
+  api_key_env: "TONGYI_API_KEY"
+  timeout_s: 60.0
 
 tts:
   provider: "gpt_sovits"

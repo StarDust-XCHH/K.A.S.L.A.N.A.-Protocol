@@ -162,6 +162,12 @@ def test_normalize_tts_text_removes_markdown_noise() -> None:
     assert normalize_tts_text(text) == "早安，舰长。 该起床啦。 今天也要元气满满。"
 
 
+def test_normalize_tts_text_strips_parenthetical_asides() -> None:
+    text = "早安呀（心里有点紧张）该起床啦。"
+
+    assert normalize_tts_text(text) == "早安呀该起床啦。"
+
+
 class FakeGptSovitsTts(GptSovitsTts):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

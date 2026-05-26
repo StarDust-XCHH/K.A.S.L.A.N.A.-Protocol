@@ -48,7 +48,10 @@ Implemented:
 - `scripts/try_gpt_sovits_tts.py` for safe local TTS smoke tests without WeChat or audio hardware playback.
 - Reusable local GSVI server deployment under ignored `local_assets/GSVI-2.2.4-240318/GPT-SoVITS-Inference/`.
 - `scripts/start_gsvi_tts_server.ps1` starts the prepackaged GSVI runtime on loopback only, and `scripts/check_tts_server.py` checks `/character_list` plus optional short synthesis.
-- `scripts/tts_control_panel.py` provides a local browser TTS control panel for starting/stopping GSVI, selecting emotion, synthesizing test text, and playing generated WAVs in-browser.
+- `scripts/tts_control_panel.py` provides a local browser debug panel for GSVI TTS and Tongyi text generation (default `qwen-flash`, urllib non-streaming, TTS elapsed_ms/RTF display, auto-fill TTS workflow).
+- `src/kaslana/adapters/llm/tongyi_chat.py` calls DashScope compatible-mode `/chat/completions` via stdlib urllib (`TONGYI_API_KEY` or `DASHSCOPE_API_KEY`).
+- `src/kaslana/core/prompt_manager.py` loads Kiana persona YAML with explicit 《崩坏三》琪亚娜·卡斯兰娜 long-text scene and length tiers.
+- `src/kaslana/services/llm_generate.py` composes prompts and calls the Tongyi client for the control panel.
 - Dedicated `kaslana-protocol` conda environment template with RTX 4060 Laptop GPU / CUDA PyTorch setup script.
 - Unit tests with fake ports.
 - Engineering handbook under `docs/`.
@@ -60,7 +63,9 @@ Not implemented:
 - Real Silero VAD.
 - Real Faster-Whisper ASR.
 - Full GPT-SoVITS integration into adapter factory, playback, cache, and orchestrator flow.
-- Real OpenAI-compatible LLM.
+- Real OpenAI-compatible LLM for orchestrator.
+- LLM adapter factory wiring into orchestrator and preflight.
+- Streaming LLM output piped directly into streaming TTS (panel currently auto-fills TTS text; user triggers synthesis manually).
 - Real offline weather provider.
 - Real nightly adapter factory for offline preprocessing.
 - Adapter factory.
@@ -95,7 +100,10 @@ Not implemented:
 - `scripts/start_gsvi_tts_server.ps1`: starts the ignored local GSVI server using its bundled runtime.
 - `scripts/stop_gsvi_tts_server.ps1`: stops only the project-managed GSVI process.
 - `scripts/check_tts_server.py`: safe local GSVI health check and optional one-shot synthesis.
-- `scripts/tts_control_panel.py`: local browser control panel served on loopback only.
+- `scripts/tts_control_panel.py`: local browser debug panel (TTS + Tongyi long text) served on loopback only.
+- `src/kaslana/adapters/llm/tongyi_chat.py`: Tongyi urllib client for compatible-mode chat completions.
+- `src/kaslana/core/prompt_manager.py`: Kiana persona prompt builder.
+- `src/kaslana/services/llm_generate.py`: control-panel long-text generation service.
 - `scripts/start_tts_control_panel.ps1`: starts the browser control panel.
 - `environment.yml`: dedicated conda environment template.
 - `scripts/setup_kaslana_conda_env.ps1`: create/update the dedicated conda environment.
@@ -163,10 +171,12 @@ Alternative next scope if continuing the offline-cache track:
 Alternative next scope if continuing the TTS track:
 
 1. Keep the local GSVI server running with `scripts/start_gsvi_tts_server.ps1 -Port 5100`.
-2. Or use `scripts/start_tts_control_panel.ps1` for browser-based service start/stop and trial synthesis.
-3. Run `scripts/check_tts_server.py` before scripted TTS experiments.
-4. Add audio playback through a controlled output adapter only after WAV generation remains stable.
-5. Wire TTS into an adapter factory and preflight path before touching real calls.
+2. Or use `scripts/start_tts_control_panel.ps1` for browser-based GSVI control, Tongyi long-text generation, and trial synthesis.
+3. Set `TONGYI_API_KEY` locally, generate short-tier Kiana dialogue with `qwen-flash`, fill it into the TTS box, and compare LLM vs TTS elapsed_ms in the panel.
+4. Run `scripts/check_tts_server.py` before scripted TTS experiments.
+5. Add audio playback through a controlled output adapter only after WAV generation remains stable.
+6. Wire TTS into an adapter factory and preflight path before touching real calls.
+7. Experiment with streaming LLM chunks into chunked TTS requests (not implemented yet).
 
 Current offline-cache decisions:
 

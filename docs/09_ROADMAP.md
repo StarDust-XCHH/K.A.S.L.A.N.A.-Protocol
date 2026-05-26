@@ -239,7 +239,8 @@
 小功能：
 
 - PromptManager。
-- OpenAI-compatible adapter。
+- OpenAI-compatible adapter（orchestrator）。
+- 控制面板长文：`tongyi_chat.py` + `/api/generate-long-text`（urllib，非流式，已实现）。
 - 回复长度控制。
 - 错误处理。
 

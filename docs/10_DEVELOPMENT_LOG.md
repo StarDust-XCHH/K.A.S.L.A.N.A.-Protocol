@@ -11,6 +11,29 @@
 - 私密音频文件路径。
 - 模型权重私有路径。
 
+## 2026-05-26 - 控制面板 TTS 链路计时与 qwen-flash 短句测试
+
+- Commit: `1ef8ba2`
+- Scope: 通义 urllib 客户端、琪亚娜 prompt、控制面板 LLM/TTS、启动/停止脚本、TTS elapsed_ms/RTF、默认 qwen-flash 与 short 档位
+- Completed:
+  - `src/kaslana/adapters/llm/tongyi_chat.py`：DashScope compatible-mode `/chat/completions`（stdlib urllib）。
+  - `PromptManager`、`LlmGenerateService`、`text_sanitize`（对话式输出、去括号旁白）。
+  - `scripts/tts_control_panel.py`：通义生成 + GSVI 合成、服务启停修复、`/api/panel/info`。
+  - `scripts/stop_tts_control_panel.ps1` 与改进的 `start_tts_control_panel.ps1`。
+  - `POST /api/synthesize` 返回 `elapsed_ms`、`audio_duration_ms`、`rtf`；输出区 **TTS 链路** 行。
+  - 默认 `qwen-flash`；面板默认 `short`（80–150 字）；Kaslana 等专名可英文拼写提示。
+- Tests:
+  - `python -m pytest`: pass (58 tests)
+  - `python -m ruff check .`: pass
+  - `git diff --check`: not run
+  - config smoke test: pass
+- Updated docs:
+  - `AI_HANDOFF.md`, `docs/00_PROJECT_STATUS.md`, `docs/05_TTS_GPT_SOVITS.md`, `docs/06_LLM_OPENAI_COMPATIBLE.md`, `docs/09_ROADMAP.md`, `FEATURES_TESTING.md`, `.env.example`, `config/config.example.yaml`
+- Next recommended task:
+  - 用 `short` 档位实测 LLM+TTS 端到端延迟，对比预瞄缓存目标。
+- Notes/Risks:
+  - 长文压测需显式设置 `KASLANA_TONGYI_MODEL=qwen-long`；RTF>1 表示合成慢于实时。
+
 ## 2026-05-25 - 初始化架构骨架
 
 - Commit: `a72451b`
@@ -234,6 +257,56 @@
   - 完成提交并推送后，优先继续硬件诊断或受控声卡输出 adapter。
 - Notes/Risks:
   - `assets/琪亚娜E7/`、`local_assets/`、`diagnostics/`、`.env` 和真实配置仍必须保持本地私有。
+
+## 2026-05-26 - 通义长文 urllib 重构（非流式）
+
+- Commit: `not committed`
+- Scope: `tongyi_chat` urllib client、面板 API/UI 迁移、移除 dashscope SDK 与 SSE
+- Completed:
+  - Added `src/kaslana/adapters/llm/tongyi_chat.py` (OpenAI-compatible `/chat/completions`, stdlib urllib only).
+  - Refactored `LlmGenerateService` for sync generation with `elapsed_ms`, `char_count`, `usage`.
+  - Extended `PromptManager` with length tiers (`medium`/`long`/`stress`) and tone strength.
+  - Panel routes: `GET /api/tongyi/status`, `POST /api/generate-long-text`; auto-fill TTS on success.
+  - Removed `dashscope` optional dependency from `pyproject.toml`.
+- Tests:
+  - `python -m pytest`: pass (50 tests)
+  - `python -m ruff check .`: pass
+  - `git diff --check`: pass
+  - config smoke test: pass
+- Updated docs:
+  - `AI_HANDOFF.md`, `docs/00_PROJECT_STATUS.md`, `docs/06_LLM_OPENAI_COMPATIBLE.md`
+  - `FEATURES_TESTING.md`, `.env.example`, `.gitignore` (`assets/demoCodeTONGYI/`)
+- Next recommended task:
+  - Manual panel test with real `TONGYI_API_KEY`; measure long-tier TTS latency separately.
+- Notes/Risks:
+  - Orchestrator still does not call LLM; SSE/streaming deferred to a later milestone.
+
+## 2026-05-26 - 通义琪亚娜长文与控制面板 SSE（已被 urllib 重构取代）
+
+- Commit: `not committed`
+- Scope: DashScope qwen-long adapter, Kiana long-text prompts, control panel API/UI, tests, docs
+- Completed:
+  - Extended `config/prompts/kiana.yaml` with 《崩坏三》琪亚娜·卡斯兰娜 `long_text_tts` scene.
+  - Added `PromptManager`, `DashScopeQwenLlm`, and `LlmGenerateService`.
+  - Extended `scripts/tts_control_panel.py` with `/api/llm/status`, `/api/llm/generate` (JSON + SSE), and UI fill-into-TTS flow.
+  - Added unit tests for prompt manager, DashScope adapter mocks, LLM service, and panel HTTP routes.
+- Tests:
+  - `python -m pytest`: pass (50 tests)
+  - `python -m ruff check .`: pass
+  - `git diff --check`: pass
+  - config smoke test: pass
+- Updated docs:
+  - `AI_HANDOFF.md`
+  - `docs/00_PROJECT_STATUS.md`
+  - `docs/06_LLM_OPENAI_COMPATIBLE.md`
+  - `FEATURES_TESTING.md`
+  - `.env.example`, `config/config.example.yaml`
+- Next recommended task:
+  - Manually verify with `TONGYI_API_KEY`, then explore streaming long-text into chunked TTS synthesis.
+- Notes/Risks:
+  - Real DashScope calls are manual only; CI uses mocked `Generation.call`.
+  - Orchestrator still does not call any LLM adapter.
+  - Superseded by the urllib non-streaming refactor in the same day.
 
 ## Template
 

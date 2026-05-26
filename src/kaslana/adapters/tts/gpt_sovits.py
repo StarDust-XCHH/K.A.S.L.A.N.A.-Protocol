@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from kaslana.core.text_sanitize import strip_parenthetical_asides
 from kaslana.ports.tts import TtsAudio, TtsPort
 
 
@@ -268,7 +269,8 @@ def normalize_tts_text(text: str) -> str:
         line = line.replace("`", "")
         if line:
             lines.append(line)
-    return re.sub(r"\s+", " ", " ".join(lines)).strip()
+    joined = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    return strip_parenthetical_asides(joined)
 
 
 def _read_wav_info(audio: bytes) -> tuple[int, int]:

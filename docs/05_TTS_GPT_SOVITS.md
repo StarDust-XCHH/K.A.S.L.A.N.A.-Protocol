@@ -46,7 +46,7 @@ tts:
 - GSVI 预打包服务已部署到 ignored 的 `local_assets/GSVI-2.2.4-240318/GPT-SoVITS-Inference/`。
 - `scripts/start_gsvi_tts_server.ps1` 使用 GSVI 自带 `runtime/python.exe` 启动服务，并只监听 `127.0.0.1`。
 - `scripts/check_tts_server.py` 可检查 `/character_list`，也可用 `--synthesize` 合成短句到 `diagnostics/tts/`。
-- `scripts/tts_control_panel.py` 提供本地浏览器控制台，可一键启动/关闭服务、选择角色与 emotion、输入测试语句并在网页内播放 WAV。
+- `scripts/tts_control_panel.py` 提供本地浏览器控制台，可一键启动/关闭服务、选择角色与 emotion、通过通义生成长文（自动填入试音框）、输入测试语句并在网页内播放 WAV。
 
 ### 本地试音命令
 
@@ -77,7 +77,7 @@ conda run -n kaslana-protocol python scripts\try_gpt_sovits_tts.py --api-style g
 .\scripts\start_tts_control_panel.ps1
 ```
 
-控制台地址是 `http://127.0.0.1:8765`。页面只绑定本机，可启动/关闭 GSVI 服务、刷新角色列表、选择 emotion、切换 `auto`/`zh`/`en`/`ja` 语言参数，并把生成音频保存到 ignored 的 `diagnostics/tts/control_panel/` 后在网页内播放。
+控制台地址是 `http://127.0.0.1:8765`。页面只绑定本机，可启动/关闭 GSVI 服务、刷新角色列表、选择 emotion、切换 `auto`/`zh`/`en`/`ja` 语言参数，调用通义生成文本（显示 `elapsed_ms` / `char_count` 后自动填入 TTS 文本框），合成后在输出区显示 **TTS 链路**（`elapsed_ms`、音频时长、RTF、字节数），并把生成音频保存到 ignored 的 `diagnostics/tts/control_panel/` 后在网页内播放。
 
 如果只想关闭 GSVI 服务端：
 

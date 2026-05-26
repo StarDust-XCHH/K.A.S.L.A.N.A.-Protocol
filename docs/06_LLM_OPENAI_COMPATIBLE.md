@@ -14,20 +14,45 @@ LLM 模块负责把用户语音识别文本、对话上下文和琪亚娜 person
 ## 当前代码位置
 
 - LLM port：`src/kaslana/ports/llm.py`
-- adapter 占位：`src/kaslana/adapters/llm/openai_compatible.py`
+- OpenAI-compatible adapter 占位：`src/kaslana/adapters/llm/openai_compatible.py`
+- DashScope / 通义 urllib 客户端：`src/kaslana/adapters/llm/tongyi_chat.py`
+- Prompt 管理：`src/kaslana/core/prompt_manager.py`
+- 控制面板长文服务：`src/kaslana/services/llm_generate.py`
 - prompt 示例：`config/prompts/kiana.yaml`
 - LLM 配置：`config/config.example.yaml`
+- 本地调试面板：`scripts/tts_control_panel.py`
 
 当前配置：
 
 ```yaml
 llm:
-  provider: "openai_compatible"
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4.1-mini"
-  api_key_env: "KASLANA_LLM_API_KEY"
-  timeout_s: 30.0
+  provider: "dashscope"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "qwen-flash"
+  api_key_env: "TONGYI_API_KEY"
+  timeout_s: 60.0
 ```
+
+## 控制面板文本生成场景（已实现）
+
+用途：
+
+- 在本地浏览器面板中生成《崩坏三》琪亚娜·卡斯兰娜口吻文本（默认短句档位，用于实时链路测试）。
+- 为后续 GPT-SoVITS 测时和流式联调准备素材。
+- 浏览器只访问本机 `127.0.0.1` API，不直接调用 DashScope。
+
+实现要点：
+
+- 环境变量：`TONGYI_API_KEY`（优先）或 `DASHSCOPE_API_KEY`；`KASLANA_TONGYI_MODEL`；`KASLANA_TONGYI_BASE_URL`
+- 默认模型：`qwen-flash`（短句实时测试）；长文压测可设 `KASLANA_TONGYI_MODEL=qwen-long`
+- HTTP：`GET /api/tongyi/status`、`POST /api/generate-long-text`（非流式，返回 `elapsed_ms`、`char_count`、`usage`）
+- 长度档位：`short`（默认，约 80–150 字）/ `medium` / `long` / `stress`
+- Persona：`config/prompts/kiana.yaml`；外国专名（如 Kaslana）可提示直接用英文拼写以利 TTS
+
+与电话短回复的区别：
+
+- 电话 orchestrator 仍计划使用短回复约束。
+- 控制面板 `short` 档位用于模拟早晨电话短句；长档位仍可用于 TTS 压测。
 
 ## 输入与输出
 
