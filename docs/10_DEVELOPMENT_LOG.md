@@ -13,7 +13,7 @@
 
 ## 2026-05-26 - 控制面板 TTS 链路计时与 qwen-flash 短句测试
 
-- Commit: `1ef8ba2`
+- Commit: `c9c7d25`
 - Scope: 通义 urllib 客户端、琪亚娜 prompt、控制面板 LLM/TTS、启动/停止脚本、TTS elapsed_ms/RTF、默认 qwen-flash 与 short 档位
 - Completed:
   - `src/kaslana/adapters/llm/tongyi_chat.py`：DashScope compatible-mode `/chat/completions`（stdlib urllib）。
