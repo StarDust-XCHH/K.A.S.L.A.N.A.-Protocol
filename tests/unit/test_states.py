@@ -15,12 +15,23 @@ def test_state_transition_chain_allows_expected_lifecycle() -> None:
         (CallEvent.DIAL_PLACED, CallState.WAITING),
         (CallEvent.CALL_CONNECTED, CallState.GREETING),
         (CallEvent.GREETING_PLAYED, CallState.LISTENING),
-        (CallEvent.USER_SPEECH_CAPTURED, CallState.THINKING),
+        (CallEvent.USER_SPEECH_CAPTURED, CallState.INTENT_MATCHING),
+        (CallEvent.CACHE_MISS, CallState.THINKING),
         (CallEvent.REPLY_READY, CallState.SPEAKING),
         (CallEvent.SPEECH_PLAYED, CallState.LISTENING),
     ):
         state = next_state_for_event(state, event)
         assert state is expected
+
+
+def test_state_transition_allows_cached_reply_path() -> None:
+    state = CallState.LISTENING
+
+    state = next_state_for_event(state, CallEvent.USER_SPEECH_CAPTURED)
+    assert state is CallState.INTENT_MATCHING
+
+    state = next_state_for_event(state, CallEvent.CACHED_REPLY_READY)
+    assert state is CallState.SPEAKING
 
 
 def test_invalid_event_raises_clear_error() -> None:

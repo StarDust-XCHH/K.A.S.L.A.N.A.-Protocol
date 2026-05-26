@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -8,9 +9,12 @@ import pytest
 from kaslana.core.events import CallEvent
 from kaslana.core.orchestrator import Orchestrator, OrchestratorDependencies, RunOptions
 from kaslana.core.states import CallState
+from kaslana.domain.offline_cache import CachedDialogueMapping, DialogueBranch, IntentMatch
 from kaslana.ports.asr import AsrPort, Transcript
 from kaslana.ports.audio import AudioChunk, AudioInputPort, AudioOutputPort
 from kaslana.ports.automation import AutomationPort
+from kaslana.ports.dialogue_cache import DialogueCachePort
+from kaslana.ports.intent_router import IntentRouterPort
 from kaslana.ports.llm import ConversationTurn, LlmPort, LlmResponse
 from kaslana.ports.tts import TtsAudio, TtsPort
 from kaslana.ports.vad import SpeechSegment, VadPort
@@ -104,18 +108,45 @@ class FakeAsr(AsrPort):
 
 
 class FakeLlm(LlmPort):
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def complete(
         self,
         system_prompt: str,
         turns: Sequence[ConversationTurn],
     ) -> LlmResponse:
+        self.calls += 1
         assert turns[-1].role == "user"
         return LlmResponse(text="早安，今天也要加油！", model="fake")
 
 
 class FakeTts(TtsPort):
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def synthesize(self, text: str) -> TtsAudio:
+        self.calls += 1
         return TtsAudio(audio=b"voice", sample_rate=16000, channels=1)
+
+
+class FakeDialogueCache(DialogueCachePort):
+    def __init__(self, mapping: CachedDialogueMapping | None) -> None:
+        self.mapping = mapping
+
+    async def load_mapping(self, target_date: date) -> CachedDialogueMapping | None:
+        return self.mapping
+
+    async def save_mapping(self, mapping: CachedDialogueMapping) -> None:
+        self.mapping = mapping
+
+
+class FakeIntentRouter(IntentRouterPort):
+    def __init__(self, match: IntentMatch) -> None:
+        self.match_result = match
+
+    def match(self, transcript: str, mapping: CachedDialogueMapping) -> IntentMatch:
+        return self.match_result
 
 
 def build_orchestrator(
@@ -123,10 +154,16 @@ def build_orchestrator(
     connected: bool = True,
     vad: VadPort | None = None,
     asr: AsrPort | None = None,
+    llm: FakeLlm | None = None,
+    tts: FakeTts | None = None,
+    dialogue_cache: DialogueCachePort | None = None,
+    intent_router: IntentRouterPort | None = None,
 ) -> tuple[Orchestrator, FakeAutomation, FakeAudioInput, FakeAudioOutput]:
     automation = FakeAutomation(connected=connected)
     audio_input = FakeAudioInput()
     audio_output = FakeAudioOutput()
+    llm = llm or FakeLlm()
+    tts = tts or FakeTts()
     orchestrator = Orchestrator(
         OrchestratorDependencies(
             automation=automation,
@@ -134,8 +171,10 @@ def build_orchestrator(
             audio_output=audio_output,
             vad=vad or FakeVad(),
             asr=asr or FakeAsr(),
-            llm=FakeLlm(),
-            tts=FakeTts(),
+            llm=llm,
+            tts=tts,
+            dialogue_cache=dialogue_cache,
+            intent_router=intent_router,
         )
     )
     return orchestrator, automation, audio_input, audio_output
@@ -161,6 +200,7 @@ async def test_orchestrator_runs_one_fake_turn_and_hangs_up() -> None:
         CallEvent.CALL_CONNECTED,
         CallEvent.GREETING_PLAYED,
         CallEvent.USER_SPEECH_CAPTURED,
+        CallEvent.CACHE_MISS,
         CallEvent.REPLY_READY,
         CallEvent.SPEECH_PLAYED,
         CallEvent.HANG_UP,
@@ -202,3 +242,104 @@ async def test_orchestrator_records_failure_for_empty_asr_text() -> None:
     assert session.state is CallState.HUNG_UP
     assert session.failure_reason == "asr returned empty text"
     assert session.transitions[-1].event is CallEvent.FAILURE
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_plays_cached_greeting_and_branch(tmp_path: Path) -> None:
+    cached_greeting = tmp_path / "greeting.wav"
+    branch_audio = tmp_path / "complaint.wav"
+    cached_greeting.write_bytes(b"wav")
+    branch_audio.write_bytes(b"wav")
+    mapping = CachedDialogueMapping(
+        target_date=date(2026, 5, 25),
+        greeting_text="缓存早安。",
+        greeting_audio_path=cached_greeting,
+        branches=(
+            DialogueBranch(
+                branch_id="complaint",
+                intent="complaint",
+                text="缓存反驳。",
+                audio_path=branch_audio,
+            ),
+        ),
+    )
+    llm = FakeLlm()
+    tts = FakeTts()
+    orchestrator, _, _, audio_output = build_orchestrator(
+        llm=llm,
+        tts=tts,
+        dialogue_cache=FakeDialogueCache(mapping),
+        intent_router=FakeIntentRouter(
+            IntentMatch(
+                branch_id="complaint",
+                confidence=1.0,
+                matched=True,
+                audio_path=branch_audio,
+            )
+        ),
+    )
+
+    session = await orchestrator.run_morning_call(
+        RunOptions(
+            contact_alias="wake-target",
+            greeting_path=Path("fallback.wav"),
+            max_turns=1,
+            run_date=date(2026, 5, 25),
+            offline_cache_enabled=True,
+        )
+    )
+
+    assert session.state is CallState.HUNG_UP
+    assert audio_output.files == [cached_greeting, branch_audio]
+    assert audio_output.pcm == []
+    assert llm.calls == 0
+    assert tts.calls == 0
+    assert CallEvent.CACHED_REPLY_READY in [transition.event for transition in session.transitions]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_falls_back_to_realtime_when_cache_misses(tmp_path: Path) -> None:
+    cached_greeting = tmp_path / "greeting.wav"
+    branch_audio = tmp_path / "complaint.wav"
+    cached_greeting.write_bytes(b"wav")
+    branch_audio.write_bytes(b"wav")
+    mapping = CachedDialogueMapping(
+        target_date=date(2026, 5, 25),
+        greeting_text="缓存早安。",
+        greeting_audio_path=cached_greeting,
+        branches=(
+            DialogueBranch(
+                branch_id="complaint",
+                intent="complaint",
+                text="缓存反驳。",
+                audio_path=branch_audio,
+            ),
+        ),
+    )
+    llm = FakeLlm()
+    tts = FakeTts()
+    orchestrator, _, _, audio_output = build_orchestrator(
+        llm=llm,
+        tts=tts,
+        dialogue_cache=FakeDialogueCache(mapping),
+        intent_router=FakeIntentRouter(
+            IntentMatch(branch_id=None, confidence=0.0, matched=False)
+        ),
+    )
+
+    session = await orchestrator.run_morning_call(
+        RunOptions(
+            contact_alias="wake-target",
+            greeting_path=Path("fallback.wav"),
+            max_turns=1,
+            run_date=date(2026, 5, 25),
+            offline_cache_enabled=True,
+        )
+    )
+
+    assert session.state is CallState.HUNG_UP
+    assert audio_output.files == [cached_greeting]
+    assert audio_output.pcm == [b"voice"]
+    assert llm.calls == 1
+    assert tts.calls == 1
+    assert CallEvent.CACHE_MISS in [transition.event for transition in session.transitions]

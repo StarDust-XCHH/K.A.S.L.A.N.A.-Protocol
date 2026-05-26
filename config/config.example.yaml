@@ -6,6 +6,22 @@ scheduler:
   enabled: false
   wake_time: "07:30"
 
+offline_cache:
+  enabled: false
+  cache_dir: "cache"
+
+ingestion:
+  paths: []
+
+intent_matching:
+  provider: "regex"
+  confidence_threshold: 0.6
+
+batch_preprocess:
+  enabled: false
+  schedule_time: "03:00"
+  weather_location: ""
+
 automation:
   android_device_id: "replace-with-adb-device-id"
   wechat:

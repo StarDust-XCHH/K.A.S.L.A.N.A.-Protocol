@@ -197,13 +197,26 @@
 
 - 本地 GPT-SoVITS 零样本短句可生成并通过声卡播放给 B 端。
 
+当前已完成：
+
+- 最小 GPT-SoVITS HTTP adapter，可用 official API 或 GSVI 风格向本地 `/tts` 请求 WAV。
+- 可从 `infer_config.json` 解析参考音频、prompt 和权重路径。
+- 可选调用 `/set_gpt_weights`、`/set_sovits_weights` 切换模型。
+- 新增 `scripts/try_gpt_sovits_tts.py` 做安全单句试音，不触发微信或拨号。
+- 新增 ignored 的可复用本地 GSVI 预打包服务部署，模型复制到 `local_assets/.../trained/琪亚娜E7/`。
+- 新增 `scripts/start_gsvi_tts_server.ps1`，用 GSVI 自带 runtime 只监听 `127.0.0.1`。
+- 新增 `scripts/stop_gsvi_tts_server.ps1`，只停止项目启动的 GSVI 进程。
+- 新增 `scripts/check_tts_server.py`，检查角色列表并可选合成短句。
+- 新增 `scripts/tts_control_panel.py` 和 `scripts/start_tts_control_panel.ps1`，提供本地浏览器试音控制台。
+- 本机因 `verge-mihomo` 占用 `5000`，当前 `.env` endpoint 使用 `http://127.0.0.1:5100`。
+- 新增 fake HTTP 风格单元测试，覆盖 payload、文本清理和权重切换。
+
 小功能：
 
-- GPT-SoVITS 健康检查。
-- 短句合成。
+- adapter factory / preflight 接线。
+- 音频播放到受控输出设备。
 - 音频格式解析。
 - 缓存。
-- 输出播放。
 
 测试：
 
@@ -313,6 +326,38 @@
 - 不满足 preflight 不拨号。
 - 失败不重试骚扰。
 - 可手动关闭。
+
+## Milestone 12：离线预瞄与缓存加速
+
+目标：
+
+- 把早晨 LLM/TTS 高延迟前移到夜间批处理。
+- 早晨首句优先播放预渲染音频。
+- 用户第一句 ASR 后通过本地 Regex 路由命中缓存分支。
+- 未命中时保守回落实时 LLM/TTS。
+
+当前已完成：
+
+- 离线缓存领域对象、ports、JSON cache adapter、Regex router adapter。
+- `INTENT_MATCHING` 状态和缓存命中/未命中状态流转。
+- Orchestrator fake 测试覆盖缓存命中不调用 LLM/TTS。
+- `scripts/run_nightly_preprocess.py` 安全 CLI 骨架。
+
+后续小功能：
+
+- adapter factory 读取 `offline_cache`、`ingestion`、`intent_matching`、`batch_preprocess` 配置。
+- PromptManager 生成稳定的对话状态树 JSON prompt。
+- LLM fake server 测试结构化输出成功和错误路径。
+- GPT-SoVITS fake server 测试批量 WAV 渲染。
+- 真实天气 provider 选择与配置。
+- 缓存健康检查和过期策略。
+
+验收：
+
+- 夜间脚本能在 fake LLM/TTS 下生成完整日期缓存。
+- 早晨 Orchestrator 命中缓存时零 LLM/TTS 调用。
+- 缓存缺失、损坏、音频缺失都能回落实时链路。
+- 生成缓存、日程资料和音频不进入 Git。
 
 ## 长期优化方向
 

@@ -30,6 +30,30 @@ class SchedulerConfig:
 
 
 @dataclass(frozen=True)
+class OfflineCacheConfig:
+    enabled: bool
+    cache_dir: Path
+
+
+@dataclass(frozen=True)
+class IngestionConfig:
+    paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class IntentMatchingConfig:
+    provider: str
+    confidence_threshold: float
+
+
+@dataclass(frozen=True)
+class BatchPreprocessConfig:
+    enabled: bool
+    schedule_time: str
+    weather_location: str
+
+
+@dataclass(frozen=True)
 class WechatConfig:
     package_name: str
     target_contact_alias: str
@@ -95,6 +119,10 @@ class PromptConfig:
 class AppConfig:
     project: ProjectConfig
     scheduler: SchedulerConfig
+    offline_cache: OfflineCacheConfig
+    ingestion: IngestionConfig
+    intent_matching: IntentMatchingConfig
+    batch_preprocess: BatchPreprocessConfig
     automation: AutomationConfig
     audio: AudioConfig
     vad: VadConfig
@@ -107,6 +135,10 @@ class AppConfig:
     def from_mapping(cls, raw: dict[str, Any]) -> AppConfig:
         project = _mapping(raw, "project")
         scheduler = _mapping(raw, "scheduler")
+        offline_cache = _mapping(raw, "offline_cache")
+        ingestion = _mapping(raw, "ingestion")
+        intent_matching = _mapping(raw, "intent_matching")
+        batch_preprocess = _mapping(raw, "batch_preprocess")
         automation = _mapping(raw, "automation")
         wechat = _mapping(automation, "wechat")
         audio = _mapping(raw, "audio")
@@ -124,6 +156,22 @@ class AppConfig:
             scheduler=SchedulerConfig(
                 enabled=_bool(scheduler, "enabled"),
                 wake_time=_str(scheduler, "wake_time"),
+            ),
+            offline_cache=OfflineCacheConfig(
+                enabled=_bool(offline_cache, "enabled"),
+                cache_dir=Path(_str(offline_cache, "cache_dir")),
+            ),
+            ingestion=IngestionConfig(
+                paths=tuple(Path(path) for path in _str_list(ingestion, "paths")),
+            ),
+            intent_matching=IntentMatchingConfig(
+                provider=_str(intent_matching, "provider"),
+                confidence_threshold=_float(intent_matching, "confidence_threshold"),
+            ),
+            batch_preprocess=BatchPreprocessConfig(
+                enabled=_bool(batch_preprocess, "enabled"),
+                schedule_time=_str(batch_preprocess, "schedule_time"),
+                weather_location=_str(batch_preprocess, "weather_location", allow_empty=True),
             ),
             automation=AutomationConfig(
                 android_device_id=_str(automation, "android_device_id"),
@@ -180,9 +228,9 @@ def _mapping(raw: dict[str, Any], key: str) -> dict[str, Any]:
     return value
 
 
-def _str(raw: dict[str, Any], key: str) -> str:
+def _str(raw: dict[str, Any], key: str, *, allow_empty: bool = False) -> str:
     value = raw.get(key)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or (not allow_empty and not value):
         raise ConfigError(f"Missing or invalid string: {key}")
     return value
 
@@ -215,6 +263,18 @@ def _float(raw: dict[str, Any], key: str) -> float:
     if not isinstance(value, int | float) or isinstance(value, bool):
         raise ConfigError(f"Missing or invalid float: {key}")
     return float(value)
+
+
+def _str_list(raw: dict[str, Any], key: str) -> list[str]:
+    value = raw.get(key)
+    if not isinstance(value, list):
+        raise ConfigError(f"Missing or invalid string list: {key}")
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item:
+            raise ConfigError(f"Missing or invalid string list item: {key}")
+        items.append(item)
+    return items
 
 
 def _points(raw: dict[str, Any], path: str) -> dict[str, Point]:

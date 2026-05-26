@@ -24,6 +24,7 @@ For future AI assistants and long-running development, read these first:
 - [docs/01_ARCHITECTURE.md](docs/01_ARCHITECTURE.md)
 - [docs/09_ROADMAP.md](docs/09_ROADMAP.md)
 - [docs/10_DEVELOPMENT_LOG.md](docs/10_DEVELOPMENT_LOG.md)
+- [FEATURES_TESTING.md](FEATURES_TESTING.md)
 
 ## Project Shape
 
@@ -40,6 +41,37 @@ tests/         unit tests first, integration tests reserved
 ```
 
 ## Local Setup
+
+Recommended conda setup with RTX 4060 Laptop GPU / CUDA PyTorch support:
+
+```powershell
+.\scripts\setup_kaslana_conda_env.ps1
+conda run -n kaslana-protocol python scripts\check_gpu.py
+conda run -n kaslana-protocol python -m pytest
+conda run -n kaslana-protocol python scripts\try_gpt_sovits_tts.py --list-emotions
+```
+
+The setup script creates or updates the `kaslana-protocol` conda environment, installs the CUDA 12.8 PyTorch wheels, installs this package in editable mode, and creates local-only `.env` / `config/config.yaml` files when missing.
+
+Reusable local GSVI TTS server check:
+
+```powershell
+.\scripts\start_gsvi_tts_server.ps1 -Port 5100
+conda run -n kaslana-protocol python scripts\check_tts_server.py
+conda run -n kaslana-protocol python scripts\try_gpt_sovits_tts.py --api-style gsvi --character "琪亚娜E7" --text "早安，该起床啦。"
+```
+
+The GSVI server lives under ignored `local_assets/`; generated WAV files are written under ignored `diagnostics/`.
+
+Local browser TTS control panel:
+
+```powershell
+.\scripts\start_tts_control_panel.ps1
+```
+
+The panel opens at `http://127.0.0.1:8765` and can start/stop the local GSVI service, select emotions, synthesize short text, and play the generated WAV in the browser.
+
+Lightweight venv setup for architecture-only development:
 
 ```powershell
 python -m venv .venv

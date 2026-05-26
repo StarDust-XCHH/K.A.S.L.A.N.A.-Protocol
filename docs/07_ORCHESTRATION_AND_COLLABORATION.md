@@ -32,6 +32,7 @@ IDLE
   -> WAITING
   -> GREETING
   -> LISTENING
+  -> INTENT_MATCHING
   -> THINKING
   -> SPEAKING
   -> LISTENING
@@ -44,9 +45,27 @@ IDLE
 - `WAITING`：等待接通。
 - `GREETING`：播放预设问候。
 - `LISTENING`：采集用户语音。
-- `THINKING`：ASR + LLM。
+- `INTENT_MATCHING`：ASR + 本地缓存意图匹配。
+- `THINKING`：缓存未命中后的实时 LLM。
 - `SPEAKING`：TTS + 播放。
 - `HUNG_UP`：挂断和释放资源。
+
+缓存命中路径：
+
+```text
+LISTENING
+  -> INTENT_MATCHING
+  -> SPEAKING
+```
+
+缓存未命中路径：
+
+```text
+LISTENING
+  -> INTENT_MATCHING
+  -> THINKING
+  -> SPEAKING
+```
 
 ## 依赖注入
 
@@ -59,6 +78,8 @@ IDLE
 - `asr`
 - `llm`
 - `tts`
+- `dialogue_cache`，可选
+- `intent_router`，可选
 
 开发建议：
 
@@ -66,6 +87,7 @@ IDLE
 - factory 可以 import 具体 adapter。
 - orchestrator 仍然不 import 具体 adapter。
 - fake dependencies 继续用于单元测试。
+- 离线缓存依赖默认可为空，保持实时链路可用。
 
 测试标准：
 
@@ -171,6 +193,9 @@ logs/
 - 等待接通超时：挂断，结束。
 - VAD 无语音：挂断，结束。
 - ASR 空文本：挂断，结束。
+- 缓存缺失：降级到实时 LLM/TTS。
+- 缓存音频缺失：降级到实时 LLM/TTS。
+- 意图匹配未命中：降级到实时 LLM/TTS。
 - LLM 失败：挂断，结束。
 - TTS 失败：挂断，结束。
 - 任何未捕获异常：尝试挂断和释放资源。

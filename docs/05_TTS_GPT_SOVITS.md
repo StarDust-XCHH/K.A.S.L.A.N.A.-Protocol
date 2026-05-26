@@ -14,7 +14,12 @@ TTS 模块负责把 LLM 生成的文本转换成可播放的语音，并通过 P
 ## 当前代码位置
 
 - TTS port：`src/kaslana/ports/tts.py`
-- GPT-SoVITS adapter 占位：`src/kaslana/adapters/tts/gpt_sovits.py`
+- GPT-SoVITS HTTP adapter：`src/kaslana/adapters/tts/gpt_sovits.py`
+- 本地试音脚本：`scripts/try_gpt_sovits_tts.py`
+- 本地 GSVI 启动脚本：`scripts/start_gsvi_tts_server.ps1`
+- 本地 GSVI 关闭脚本：`scripts/stop_gsvi_tts_server.ps1`
+- 本地 GSVI 健康检查脚本：`scripts/check_tts_server.py`
+- 本地浏览器试音控制台：`scripts/tts_control_panel.py`
 - TTS 配置：`config/config.example.yaml`
 
 当前配置：
@@ -26,6 +31,68 @@ tts:
   speaker: "kiana"
   timeout_s: 60.0
 ```
+
+`config/config.example.yaml` 仍保留 official API 的 `9880` 示例；当前 GSVI 试音脚本优先读取 `.env` 中的 `KASLANA_TTS_ENDPOINT=http://127.0.0.1:5100`。
+
+## 当前最小实现
+
+已完成一个不接入微信、不播放声卡、只调用本地 GPT-SoVITS HTTP 服务的最小试音模块：
+
+- `GptSovitsTts.synthesize(text)`：向本地 `/tts` 发送 JSON 请求，要求返回 WAV，并解析采样率和声道数。
+- `GptSovitsTts.load_weights()`：可选调用 `/set_gpt_weights` 和 `/set_sovits_weights`。
+- `load_voice_profile_from_infer_config()`：读取 `infer_config.json`，解析参考音频、prompt、GPT 权重和 SoVITS 权重路径。
+- `scripts/try_gpt_sovits_tts.py`：用命令行或环境变量指定模型配置，生成一个 ignored 的测试 WAV。
+- 兼容两种请求风格：`official` 对应 GPT-SoVITS `api_v2.py`，`gsvi` 对应 GSVI / TTS-for-GPT-SoVITS。
+- GSVI 预打包服务已部署到 ignored 的 `local_assets/GSVI-2.2.4-240318/GPT-SoVITS-Inference/`。
+- `scripts/start_gsvi_tts_server.ps1` 使用 GSVI 自带 `runtime/python.exe` 启动服务，并只监听 `127.0.0.1`。
+- `scripts/check_tts_server.py` 可检查 `/character_list`，也可用 `--synthesize` 合成短句到 `diagnostics/tts/`。
+- `scripts/tts_control_panel.py` 提供本地浏览器控制台，可一键启动/关闭服务、选择角色与 emotion、输入测试语句并在网页内播放 WAV。
+
+### 本地试音命令
+
+本项目当前使用 GSVI / TTS-for-GPT-SoVITS 预打包服务。由于本机网络代理 `verge-mihomo` 已绑定 `5000` 端口，本项目默认把 GSVI endpoint 固定为 `http://127.0.0.1:5100`。
+
+启动服务端：
+
+```powershell
+.\scripts\start_gsvi_tts_server.ps1 -Port 5100
+```
+
+检查服务端角色列表：
+
+```powershell
+conda run -n kaslana-protocol python scripts\check_tts_server.py
+```
+
+合成短句：
+
+```powershell
+conda run -n kaslana-protocol python scripts\check_tts_server.py --synthesize --character "琪亚娜E7" --text "早安。"
+conda run -n kaslana-protocol python scripts\try_gpt_sovits_tts.py --api-style gsvi --character "琪亚娜E7" --text "早安，该起床啦。" --output diagnostics\tts\kiana_test.wav
+```
+
+浏览器控制台：
+
+```powershell
+.\scripts\start_tts_control_panel.ps1
+```
+
+控制台地址是 `http://127.0.0.1:8765`。页面只绑定本机，可启动/关闭 GSVI 服务、刷新角色列表、选择 emotion、切换 `auto`/`zh`/`en`/`ja` 语言参数，并把生成音频保存到 ignored 的 `diagnostics/tts/control_panel/` 后在网页内播放。
+
+如果只想关闭 GSVI 服务端：
+
+```powershell
+.\scripts\stop_gsvi_tts_server.ps1
+```
+
+如果本地 official API 服务已经加载好模型，可加 `--skip-weight-switch` 跳过权重切换。输出目录 `diagnostics/` 和 WAV 文件默认不进入 Git。
+试音脚本会自动读取项目根目录 `.env`，所以通过 `scripts/setup_kaslana_conda_env.ps1` 生成本机配置后无需手动重复设置这些环境变量。
+
+当前限制：
+
+- 脚本只保存 WAV，不负责播放。
+- 本地浏览器控制台只播放网页音频，不播放到外置声卡。
+- 只验证 TTS 单模块，不进入 orchestrator，也不触发微信或真实通话。
 
 ## 输入与输出
 
@@ -52,6 +119,8 @@ TTS adapter 不负责：
 ## 待实现小功能
 
 ### 1. GPT-SoVITS 服务健康检查
+
+当前已完成独立脚本 `scripts/check_tts_server.py` 和本地浏览器控制台，均可检查 GSVI `/character_list` 并可选合成短句。尚未把健康检查接入 adapter factory 或 orchestrator preflight。
 
 开发建议：
 

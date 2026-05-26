@@ -17,6 +17,11 @@ def test_example_config_loads() -> None:
     assert config.audio.sample_rate == 16000
     assert config.vad.provider == "silero"
     assert config.llm.api_key_env == "KASLANA_LLM_API_KEY"
+    assert config.offline_cache.enabled is False
+    assert config.offline_cache.cache_dir == Path("cache")
+    assert config.ingestion.paths == ()
+    assert config.intent_matching.provider == "regex"
+    assert config.batch_preprocess.schedule_time == "03:00"
 
 
 def test_missing_required_mapping_raises_config_error(tmp_path: Path) -> None:

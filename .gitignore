@@ -6,6 +6,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.idea/
+*.iml
 .coverage
 htmlcov/
 build/
@@ -17,9 +19,11 @@ venv/
 config/config.yaml
 assets/greetings/*.wav
 assets/samples/*
+assets/琪亚娜E7/
 !assets/greetings/.gitkeep
 !assets/samples/.gitkeep
 logs/
+cache/
 local_assets/
 calibration_outputs/
 diagnostics/

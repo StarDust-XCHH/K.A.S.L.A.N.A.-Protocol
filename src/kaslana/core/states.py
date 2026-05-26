@@ -11,6 +11,7 @@ class CallState(StrEnum):
     WAITING = "WAITING"
     GREETING = "GREETING"
     LISTENING = "LISTENING"
+    INTENT_MATCHING = "INTENT_MATCHING"
     THINKING = "THINKING"
     SPEAKING = "SPEAKING"
     HUNG_UP = "HUNG_UP"
@@ -25,7 +26,12 @@ ALLOWED_TRANSITIONS: dict[CallState, frozenset[CallState]] = {
     CallState.DIALING: frozenset({CallState.WAITING, CallState.HUNG_UP}),
     CallState.WAITING: frozenset({CallState.GREETING, CallState.HUNG_UP}),
     CallState.GREETING: frozenset({CallState.LISTENING, CallState.HUNG_UP}),
-    CallState.LISTENING: frozenset({CallState.THINKING, CallState.HUNG_UP}),
+    CallState.LISTENING: frozenset({CallState.INTENT_MATCHING, CallState.HUNG_UP}),
+    CallState.INTENT_MATCHING: frozenset({
+        CallState.THINKING,
+        CallState.SPEAKING,
+        CallState.HUNG_UP,
+    }),
     CallState.THINKING: frozenset({CallState.SPEAKING, CallState.HUNG_UP}),
     CallState.SPEAKING: frozenset({CallState.LISTENING, CallState.HUNG_UP}),
     CallState.HUNG_UP: frozenset(),
